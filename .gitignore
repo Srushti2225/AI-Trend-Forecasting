@@ -1,0 +1,42 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+.env/
+.env.*
+
+# Environment variables
+.env
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Data folders (avoid pushing raw/processed data)
+data/raw/
+data/processed/
+
+# Memory / temp files
+memory/
+
+# JSON outputs (optional – remove if you want to push them)
+*.json
+
+# Secrets / config
+
+# Python build files
+build/
+dist/
+*.egg-info/
+
+# Jupyter Notebook checkpoints (if any)
+.ipynb_checkpoints/
