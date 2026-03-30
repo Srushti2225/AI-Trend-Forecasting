@@ -3,9 +3,11 @@ import sys
 import os
 import json
 import time
+import re
 import feedparser
 from datetime import datetime
 from pytrends.request import TrendReq
+from collections import Counter
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
@@ -13,24 +15,51 @@ from config import (
     NEWS_API_KEY,
     FASHION_KEYWORDS,
     BEAUTY_KEYWORDS,
-    FASHION_SUBREDDITS,
-    BEAUTY_SUBREDDITS,
+    FASHION_SEED_TOPICS,
+    BEAUTY_SEED_TOPICS,
+    ALL_KEYWORDS,
     DATA_DIR
 )
 
-# 1. YOUTUBE SHORTS
 
-def fetch_youtube_shorts_trends(keywords, max_results=10):
+# ─────────────────────────────────────────
+# NOISE FILTER
+# ─────────────────────────────────────────
+
+NOISE_PATTERNS = [
+    r'\w+shorts\w*',      # trendingshorts, viralshorts etc
+    r'\w+feed\w*',        # shortsfeed etc
+    r'\w+reels\w*',       # trendingreels etc
+    r'\w+viral\w*',       # goingviral etc
+    r'[a-z]+makeup[a-z]+', # asokamakeup etc
+    r'[a-z]+fashion[a-z]+', # indianfashion concatenated
+    r'\w+india[a-z]+',    # makeupindia concatenated
+]
+
+def is_noise(phrase):
+    for pattern in NOISE_PATTERNS:
+        if re.search(pattern, phrase.lower()):
+            return True
+    if any(len(w) > 14 for w in phrase.split()):
+        return True
+    return False
+
+
+# ─────────────────────────────────────────
+# 1. YOUTUBE SHORTS — BROAD FETCH
+# ─────────────────────────────────────────
+
+def fetch_youtube_shorts(seed_topics, max_results=15):
     results = []
 
-    for keyword in keywords:
+    for topic in seed_topics:
         url = "https://www.googleapis.com/youtube/v3/search"
         params = {
             "part": "snippet",
-            "q": keyword + " shorts",
+            "q": topic,
             "type": "video",
             "videoDuration": "short",
-            "order": "date",
+            "order": "viewCount",
             "maxResults": max_results,
             "regionCode": "IN",
             "relevanceLanguage": "en",
@@ -45,7 +74,7 @@ def fetch_youtube_shorts_trends(keywords, max_results=10):
             for item in data.get("items", []):
                 results.append({
                     "source": "youtube_shorts",
-                    "keyword": keyword,
+                    "seed_topic": topic,
                     "title": item["snippet"]["title"],
                     "channel": item["snippet"]["channelTitle"],
                     "published_at": item["snippet"]["publishedAt"],
@@ -54,27 +83,27 @@ def fetch_youtube_shorts_trends(keywords, max_results=10):
                     "fetched_at": datetime.now().isoformat()
                 })
 
-            print(f"  [YouTube] '{keyword}' -> {len(data.get('items', []))} results")
+            print(f"  [YouTube] '{topic}' -> {len(data.get('items', []))} videos")
 
-        except requests.exceptions.HTTPError as e:
-            print(f"  [YouTube] HTTP error for '{keyword}': {e}")
         except Exception as e:
-            print(f"  [YouTube] Error for '{keyword}': {e}")
+            print(f"  [YouTube] Error for '{topic}': {e}")
 
     return results
 
 
-# 2. GOOGLE TRENDS — INTEREST OVER TIME
+# ─────────────────────────────────────────
+# 2. GOOGLE TRENDS — CURATED KEYWORDS
+# Scores all known trend keywords by velocity
+# ─────────────────────────────────────────
 
-
-def fetch_google_trends(keywords, timeframe="now 7-d", geo="IN"):
+def fetch_google_trends_velocity(keywords, geo="IN"):
     pytrends = TrendReq(hl="en-IN", tz=330)
     results = []
-    chunks = [keywords[i:i+5] for i in range(0, len(keywords), 5)]
+    chunks = [keywords[i:i + 5] for i in range(0, len(keywords), 5)]
 
     for chunk in chunks:
         try:
-            pytrends.build_payload(chunk, timeframe=timeframe, geo=geo)
+            pytrends.build_payload(chunk, timeframe="now 7-d", geo=geo)
             interest_df = pytrends.interest_over_time()
 
             if not interest_df.empty:
@@ -94,26 +123,22 @@ def fetch_google_trends(keywords, timeframe="now 7-d", geo="IN"):
                             "peak_value": round(float(peak_value), 2),
                             "rising": bool(velocity > 5),
                             "geo": geo,
-                            "timeframe": timeframe,
                             "fetched_at": datetime.now().isoformat()
                         })
 
-            print(f"  [Google Trends] {chunk} -> fetched")
+            print(f"  [Google Trends] Scored: {chunk}")
             time.sleep(1)
 
         except Exception as e:
-            print(f"  [Google Trends] Error for {chunk}: {e}")
+            print(f"  [Google Trends] Error: {e}")
 
     return results
-
-
-# 3. GOOGLE TRENDS — RISING QUERIES
 
 
 def fetch_google_trends_rising_queries(keywords, geo="IN"):
     pytrends = TrendReq(hl="en-IN", tz=330)
     results = []
-    chunks = [keywords[i:i+5] for i in range(0, len(keywords), 5)]
+    chunks = [keywords[i:i + 5] for i in range(0, len(keywords), 5)]
 
     for chunk in chunks:
         try:
@@ -136,13 +161,14 @@ def fetch_google_trends_rising_queries(keywords, geo="IN"):
             time.sleep(1)
 
         except Exception as e:
-            print(f"  [Google Rising] Error for {chunk}: {e}")
+            print(f"  [Google Rising] Error: {e}")
 
     return results
 
 
-
-# 4. NEWSAPI — FASHION & BEAUTY ARTICLES
+# ─────────────────────────────────────────
+# 3. NEWSAPI — CHECK KEYWORD MENTIONS
+# ─────────────────────────────────────────
 
 def fetch_news_articles(keywords):
     if not NEWS_API_KEY:
@@ -151,15 +177,14 @@ def fetch_news_articles(keywords):
 
     results = []
 
-    # Separate queries for fashion and beauty
     queries = [
-        ("fashion", "Indian fashion trends 2026"),
-        ("beauty", "Indian beauty trends makeup skincare 2026"),
-        ("fashion_india", "kurta co-ord set ethnic wear India"),
-        ("beauty_india", "glass skin lip liner beauty India"),
+        "indian fashion trends 2026",
+        "india beauty makeup skincare",
+        "bollywood fashion outfit style",
+        "gen z india fashion beauty"
     ]
 
-    for category, query in queries:
+    for query in queries:
         try:
             url = "https://newsapi.org/v2/everything"
             params = {
@@ -173,141 +198,88 @@ def fetch_news_articles(keywords):
             response = requests.get(url, params=params)
             response.raise_for_status()
             data = response.json()
-
             articles = data.get("articles", [])
-            all_keywords = FASHION_KEYWORDS + BEAUTY_KEYWORDS
 
             for article in articles:
-                matched_keywords = []
-                title_desc = (
-                    str(article.get("title", "")) + " " +
-                    str(article.get("description", ""))
-                ).lower()
+                title = str(article.get("title", ""))
+                description = str(article.get("description", ""))[:300]
 
-                for kw in all_keywords:
-                    if kw.lower() in title_desc:
-                        matched_keywords.append(kw)
+                # Check which curated keywords appear in this article
+                matched = [
+                    kw for kw in keywords
+                    if kw.lower() in (title + " " + description).lower()
+                ]
 
                 results.append({
                     "source": "newsapi",
-                    "category": category,
-                    "title": article.get("title", ""),
-                    "description": str(article.get("description", ""))[:300],
+                    "title": title,
+                    "description": description,
                     "url": article.get("url", ""),
                     "published_at": article.get("publishedAt", ""),
                     "source_name": article.get("source", {}).get("name", ""),
-                    "matched_keywords": matched_keywords,
+                    "matched_keywords": matched,
                     "fetched_at": datetime.now().isoformat()
                 })
 
-            print(f"  [NewsAPI] '{category}' -> {len(articles)} articles fetched")
+            print(f"  [NewsAPI] '{query}' -> {len(articles)} articles")
             time.sleep(0.5)
 
-        except requests.exceptions.HTTPError as e:
-            print(f"  [NewsAPI] HTTP error for '{category}': {e}")
         except Exception as e:
-            print(f"  [NewsAPI] Error for '{category}': {e}")
+            print(f"  [NewsAPI] Error: {e}")
 
     return results
 
 
-# 5. RSS FEEDS — INDIAN FASHION & BEAUTY
+# ─────────────────────────────────────────
+# 4. RSS FEEDS
+# ─────────────────────────────────────────
 
-
-def fetch_rss_feeds():
+def fetch_rss_feeds(keywords):
     feeds = [
-        {
-            "name": "Vogue India",
-            "url": "https://feeds.feedburner.com/VogueIndia",
-            "category": "fashion"
-        },
-        {
-            "name": "Femina India",
-            "url": "https://www.femina.in/feed",
-            "category": "fashion_beauty"
-        },
-        {
-            "name": "Harper's Bazaar India",
-            "url": "https://www.harpersbazaar.in/feed",
-            "category": "fashion"
-        },
-        {
-            "name": "Pinkvilla Fashion",
-            "url": "https://www.pinkvilla.com/fashion/rss",
-            "category": "fashion"
-        },
-        {
-            "name": "Pinkvilla Beauty",
-            "url": "https://www.pinkvilla.com/beauty/rss",
-            "category": "beauty"
-        },
-        {
-            "name": "BeBeautiful",
-            "url": "https://www.bebeautiful.in/feed",
-            "category": "beauty"
-        },
-        {
-            "name": "Popxo Fashion",
-            "url": "https://www.popxo.com/category/fashion/feed",
-            "category": "fashion"
-        },
-        {
-            "name": "Popxo Beauty",
-            "url": "https://www.popxo.com/category/beauty/feed",
-            "category": "beauty"
-        },
-        {
-            "name": "Hauterfly",
-            "url": "https://www.hauterfly.com/feed",
-            "category": "fashion_beauty"
-        },
-        {
-            "name": "Lifestyle Asia India",
-            "url": "https://www.lifestyleasia.com/ind/feed",
-            "category": "fashion_beauty"
-        },
+        {"name": "Vogue India",       "url": "https://feeds.feedburner.com/VogueIndia"},
+        {"name": "Femina",            "url": "https://www.femina.in/feed"},
+        {"name": "Harper's Bazaar",   "url": "https://www.harpersbazaar.in/feed"},
+        {"name": "Pinkvilla Fashion", "url": "https://www.pinkvilla.com/fashion/rss"},
+        {"name": "Pinkvilla Beauty",  "url": "https://www.pinkvilla.com/beauty/rss"},
+        {"name": "Popxo Fashion",     "url": "https://www.popxo.com/category/fashion/feed"},
+        {"name": "Popxo Beauty",      "url": "https://www.popxo.com/category/beauty/feed"},
+        {"name": "Hauterfly",         "url": "https://www.hauterfly.com/feed"},
+        {"name": "Lifestyle Asia",    "url": "https://www.lifestyleasia.com/ind/feed"},
+        {"name": "BeBeautiful",       "url": "https://www.bebeautiful.in/feed"},
     ]
 
     results = []
-    all_keywords = FASHION_KEYWORDS + BEAUTY_KEYWORDS
 
     for feed_info in feeds:
         try:
-            # feedparser handles all RSS/Atom formats automatically
             feed = feedparser.parse(feed_info["url"])
-
             count = 0
+
             for entry in feed.entries[:10]:
                 title = entry.get("title", "")
                 summary = entry.get("summary", "")[:300]
-                published = entry.get("published", "")
-                link = entry.get("link", "")
 
-                # Skip empty entries
                 if not title:
                     continue
 
-                # Match keywords
-                matched_keywords = []
-                content = (title + " " + summary).lower()
-                for kw in all_keywords:
-                    if kw.lower() in content:
-                        matched_keywords.append(kw)
+                matched = [
+                    kw for kw in keywords
+                    if kw.lower() in (title + " " + summary).lower()
+                ]
 
                 results.append({
                     "source": "rss_feed",
                     "feed_name": feed_info["name"],
-                    "category": feed_info["category"],
                     "title": title,
                     "summary": summary,
-                    "url": link,
-                    "published_at": published,
-                    "matched_keywords": matched_keywords,
+                    "url": entry.get("link", ""),
+                    "published_at": entry.get("published", ""),
+                    "matched_keywords": matched,
                     "fetched_at": datetime.now().isoformat()
                 })
                 count += 1
 
-            print(f"  [RSS] {feed_info['name']:<25} -> {count} articles")
+            print(f"  [RSS] {feed_info['name']:<22} -> {count} articles")
 
         except Exception as e:
             print(f"  [RSS] Error for {feed_info['name']}: {e}")
@@ -315,51 +287,57 @@ def fetch_rss_feeds():
     return results
 
 
+# ─────────────────────────────────────────
 # MAIN RUNNER
+# ─────────────────────────────────────────
 
-def run_scout(industry="both"):
+def run_scout():
     print("\n" + "="*50)
     print("  SCOUT AGENT RUNNING")
     print("="*50)
 
-    if industry == "fashion":
-        keywords = FASHION_KEYWORDS
-    elif industry == "beauty":
-        keywords = BEAUTY_KEYWORDS
-    else:
-        keywords = FASHION_KEYWORDS + BEAUTY_KEYWORDS
-
     all_signals = []
+    all_seed_topics = FASHION_SEED_TOPICS + BEAUTY_SEED_TOPICS
 
-    # 1. YouTube Shorts
+    # 1. YouTube Shorts — broad fetch
     print("\n[1/5] Fetching YouTube Shorts...")
-    youtube_data = fetch_youtube_shorts_trends(keywords[:5], max_results=10)
+    youtube_data = fetch_youtube_shorts(all_seed_topics, max_results=15)
     all_signals.extend(youtube_data)
-    print(f"  Total: {len(youtube_data)} signals")
+    print(f"  Total: {len(youtube_data)} videos collected")
 
-    # 2. Google Trends interest
-    print("\n[2/5] Fetching Google Trends (interest over time)...")
-    trends_data = fetch_google_trends(keywords, timeframe="now 7-d", geo="IN")
+    # 2. Google Trends — score ALL curated keywords
+    print("\n[2/5] Scoring curated keywords via Google Trends...")
+    trends_data = fetch_google_trends_velocity(ALL_KEYWORDS, geo="IN")
     all_signals.extend(trends_data)
-    print(f"  Total: {len(trends_data)} signals")
 
-    # 3. Google Trends rising queries
-    print("\n[3/5] Fetching Google Trends (rising queries)...")
-    rising_data = fetch_google_trends_rising_queries(keywords[:5], geo="IN")
+    # Show rising ones immediately
+    rising = [s for s in trends_data if s.get("rising")]
+    print(f"  Total: {len(trends_data)} keywords scored")
+    print(f"  Currently RISING in India: {[s['keyword'] for s in rising]}")
+
+    # 3. Google Trends rising queries — for top rising keywords only
+    print("\n[3/5] Fetching rising queries for top keywords...")
+    top_keywords = [
+        s["keyword"] for s in
+        sorted(trends_data, key=lambda x: x["velocity"], reverse=True)[:10]
+    ]
+    rising_data = fetch_google_trends_rising_queries(top_keywords, geo="IN")
     all_signals.extend(rising_data)
-    print(f"  Total: {len(rising_data)} signals")
+    print(f"  Total: {len(rising_data)} rising queries found")
 
-    # 4. NewsAPI articles
+    # 4. NewsAPI — check curated keywords in news
     print("\n[4/5] Fetching news articles...")
-    news_data = fetch_news_articles(keywords)
+    news_data = fetch_news_articles(ALL_KEYWORDS)
     all_signals.extend(news_data)
-    print(f"  Total: {len(news_data)} signals")
+    news_with_matches = [n for n in news_data if n.get("matched_keywords")]
+    print(f"  Total: {len(news_data)} articles | {len(news_with_matches)} matched keywords")
 
-    # 5. RSS Feeds
-    print("\n[5/5] Fetching RSS feeds from Indian publications...")
-    rss_data = fetch_rss_feeds()
+    # 5. RSS feeds — check curated keywords in publications
+    print("\n[5/5] Fetching RSS feeds...")
+    rss_data = fetch_rss_feeds(ALL_KEYWORDS)
     all_signals.extend(rss_data)
-    print(f"  Total: {len(rss_data)} signals")
+    rss_with_matches = [r for r in rss_data if r.get("matched_keywords")]
+    print(f"  Total: {len(rss_data)} articles | {len(rss_with_matches)} matched keywords")
 
     print("\n" + "="*50)
     print(f"  SCOUT COMPLETE — {len(all_signals)} total signals collected")
@@ -368,56 +346,63 @@ def run_scout(industry="both"):
     return all_signals
 
 
+# ─────────────────────────────────────────
 # SUMMARY PRINTER
+# ─────────────────────────────────────────
 
 def print_summary(signals):
     print("\n--- SIGNAL SUMMARY ---\n")
 
-    sources = [
-        "youtube_shorts",
-        "google_trends",
-        "google_trends_rising",
-        "newsapi",
-        "rss_feed"
-    ]
+    sources = ["youtube_shorts", "google_trends",
+               "google_trends_rising", "newsapi", "rss_feed"]
 
     for source in sources:
         items = [s for s in signals if s["source"] == source]
         print(f"  {source:<25} : {len(items)} signals")
 
-    print("\nTop rising Google Trends keywords:")
+    print("\n  Keywords RISING in India right now:")
     trends = [s for s in signals if s["source"] == "google_trends"]
-    for item in sorted(trends, key=lambda x: x["velocity"], reverse=True)[:5]:
+    rising = [t for t in trends if t.get("rising")]
+
+    if rising:
+        for item in sorted(rising, key=lambda x: x["velocity"], reverse=True):
+            print(f"    RISING  {item['keyword']:<30} velocity: {item['velocity']}")
+    else:
+        print("    None above threshold right now")
+
+    print("\n  All keyword velocities:")
+    for item in sorted(trends, key=lambda x: x["velocity"], reverse=True):
         status = "RISING" if item["rising"] else "stable"
-        print(f"  [{status}] {item['keyword']:<25} velocity: {item['velocity']}")
+        bar = "+" * max(0, int(item["velocity"])) if item["velocity"] > 0 else ""
+        print(f"    [{status:<6}] {item['keyword']:<30} {item['velocity']:>7.2f}  {bar}")
 
-    print("\nTop rising queries:")
-    rising = [s for s in signals if s["source"] == "google_trends_rising"]
-    for item in sorted(rising, key=lambda x: x["value"], reverse=True)[:5]:
-        print(f"  '{item['rising_query']}' from '{item['parent_keyword']}' — value: {item['value']}")
+    print("\n  Top rising breakout queries:")
+    rising_q = sorted(
+        [s for s in signals if s["source"] == "google_trends_rising"],
+        key=lambda x: x["value"],
+        reverse=True
+    )[:8]
+    for item in rising_q:
+        print(f"    '{item['rising_query']}' <- '{item['parent_keyword']}' (value: {item['value']})")
 
-    print("\nLatest news articles:")
-    news = [s for s in signals if s["source"] == "newsapi"]
-    for item in news[:3]:
-        print(f"  [{item['source_name']}] {item['title'][:70]}")
-        if item["matched_keywords"]:
-            print(f"    Matched: {item['matched_keywords']}")
-
-    print("\nLatest RSS articles:")
-    rss = [s for s in signals if s["source"] == "rss_feed"]
-    for item in rss[:3]:
-        print(f"  [{item['feed_name']}] {item['title'][:70]}")
-        if item["matched_keywords"]:
-            print(f"    Matched: {item['matched_keywords']}")
+    print("\n  Keywords mentioned in news/RSS:")
+    all_matched = []
+    for s in signals:
+        if s["source"] in ["newsapi", "rss_feed"]:
+            all_matched.extend(s.get("matched_keywords", []))
+    mention_counts = Counter(all_matched)
+    for kw, count in mention_counts.most_common(10):
+        print(f"    {kw:<30} mentions: {count}")
 
 
+# ─────────────────────────────────────────
 # ENTRY POINT
+# ─────────────────────────────────────────
 
 if __name__ == "__main__":
-    signals = run_scout(industry="both")
+    signals = run_scout()
     print_summary(signals)
 
-    # Save to file
     os.makedirs(DATA_DIR, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filepath = os.path.join(DATA_DIR, f"signals_{timestamp}.json")
@@ -425,4 +410,4 @@ if __name__ == "__main__":
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(signals, f, indent=2, ensure_ascii=False)
 
-    print(f"\nSignals saved to: {filepath}")
+    print(f"\n  Signals saved to: {filepath}")

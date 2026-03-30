@@ -14,49 +14,58 @@ REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "trend-forecaster-v1")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", None)
 
 # --- Reddit Communities (for later) ---
-FASHION_SUBREDDITS = [
-    "IndianFashionAddicts",
-    "IndiaShopping",
-    "femalefashionadvice",
-    "streetwear"
-]
-
-BEAUTY_SUBREDDITS = [
-    "DesiBeauty",
-    "IndianSkincareAddicts",
-    "MakeupAddiction",
-    "AsianBeauty"
-]
-
-# --- Fashion Keywords (India-focused) ---
+# --- Broad Seed Topics (NOT specific trends — just domain anchors) ---
+# --- Fashion Keywords (India-focused, Gen Z) ---
+# --- Fashion Keywords (India-focused, Gen Z) ---
 FASHION_KEYWORDS = [
-    "co-ord set",
-    "ethnic fusion",
-    "Y2K fashion",
-    "quiet luxury",
-    "dopamine dressing",
-    "cottagecore",
-    "mob wife aesthetic",
-    "kurta set",
-    "indo western",
-    "mirror work outfit"
+    # Ethnic / Indian styles
+    "co-ord set", "ethnic fusion", "kurta set", "indo western",
+    "mirror work", "bandhani dress", "ajrakh print", "phulkari dupatta",
+    "saree draping", "lehenga skirt", "sharara set", "palazzo set",
+
+    # Western trends popular in India
+    "quiet luxury", "mob wife aesthetic", "Y2K fashion", "cottagecore",
+    "dopamine dressing", "dark academia", "coastal grandmother",
+    "clean girl aesthetic", "old money style", "ballet core",
+
+    # Specific garment trends
+    "barrel leg jeans", "wide leg pants", "maxi skirt", "corset top",
+    "blazer dress", "shirt dress", "crop jacket", "shrug outfit"
 ]
 
-# --- Beauty Keywords (India-focused) ---
+# --- Beauty Keywords (India-focused, Gen Z) ---
 BEAUTY_KEYWORDS = [
-    "glass skin",
-    "lip liner",
-    "blusher makeup",
-    "glazed donut skin",
-    "clean girl makeup",
-    "skinimalism",
-    "bold brow",
-    "dewy skin",
-    "watercolour blush",
-    "no makeup makeup"
+    # Skincare trends
+    "glass skin", "glazed donut skin", "skin flooding", "slugging skincare",
+    "dewy skin", "skinimalism", "double cleansing", "barrier repair",
+
+    # Makeup trends
+    "clean girl makeup", "no makeup makeup", "lip liner overline",
+    "blush draping", "soap brows", "foxy eye", "graphic liner",
+    "monochromatic makeup", "editorial makeup", "bollywood glam",
+
+    # Specific product trends
+    "lip liner", "bold brow", "watercolour blush", "skin tint",
+    "tinted moisturizer", "bronzer makeup", "face oil routine"
 ]
 
-# --- All Keywords Combined ---
+# Seed topics for broad YouTube/News fetching
+FASHION_SEED_TOPICS = [
+    "indian fashion 2026",
+    "outfit ideas india",
+    "indian street style",
+    "ethnic wear trend",
+    "gen z fashion india"
+]
+
+BEAUTY_SEED_TOPICS = [
+    "indian beauty trends 2026",
+    "makeup tutorial india",
+    "skincare routine india",
+    "beauty tips hindi",
+    "gen z makeup india"
+]
+
 ALL_KEYWORDS = FASHION_KEYWORDS + BEAUTY_KEYWORDS
 
 # --- Industry Tags ---
