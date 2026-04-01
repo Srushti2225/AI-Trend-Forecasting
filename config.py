@@ -76,8 +76,10 @@ INDUSTRY_TAGS = {
 
 # --- Trend Detection Thresholds ---
 VELOCITY_THRESHOLD = 5
-CONFIDENCE_HIGH = 0.75
-CONFIDENCE_MEDIUM = 0.45
+CONFIDENCE_HIGH    = 0.40   # above this = STRONG
+CONFIDENCE_MEDIUM  = 0.25   # above this = MODERATE
+CONFIDENCE_WEAK    = 0.15   # above this = WEAK
+                            # below = NOISE
 
 # --- Geography ---
 DEFAULT_GEO = "IN"
@@ -93,6 +95,7 @@ GOOGLE_TRENDS_MONTHLY = "today 1-m"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data", "raw")
 MEMORY_DIR = os.path.join(BASE_DIR, "memory")
+PROCESSED_DIR = os.path.join(BASE_DIR, "data", "processed")
 
 # --- Sanity check on startup ---
 def check_config():

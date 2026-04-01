@@ -5,7 +5,7 @@ import json
 import time
 import re
 import feedparser
-from datetime import datetime
+from datetime import datetime, timedelta
 from pytrends.request import TrendReq
 from collections import Counter
 
@@ -22,9 +22,8 @@ from config import (
 )
 
 
-# ─────────────────────────────────────────
+
 # NOISE FILTER
-# ─────────────────────────────────────────
 
 NOISE_PATTERNS = [
     r'\w+shorts\w*',      # trendingshorts, viralshorts etc
@@ -36,6 +35,177 @@ NOISE_PATTERNS = [
     r'\w+india[a-z]+',    # makeupindia concatenated
 ]
 
+
+# WIKIPEDIA PAGES TO TRACK
+
+WIKIPEDIA_PAGES = {
+    "fashion_aesthetics": [
+        "Quiet luxury", "Cottagecore", "Dark academia", "Y2K fashion",
+        "Mob wife aesthetic", "Old money aesthetic", "Balletcore",
+        "Gorpcore", "Coastal grandmother", "Normcore",
+        "Dopamine dressing", "Barbiecore", "Clean girl aesthetic",
+    ],
+    "indian_fashion": [
+        "Kurta", "Lehenga", "Salwar kameez", "Saree",
+        "Indo-western clothing", "Churidar", "Anarkali suit",
+        "Bandhani", "Phulkari", "Ajrakh", "Fashion in India",
+    ],
+    "beauty_trends": [
+        "Glass skin", "Skinimalism", "K-beauty", "Slugging (skincare)",
+        "Double cleansing", "Skin care", "Korean beauty",
+        "Contouring", "Lip liner", "Eyebrow shaping",
+    ],
+    "general_fashion": [
+        "Fast fashion", "Sustainable fashion", "Streetwear",
+        "Athleisure", "Capsule wardrobe", "Vintage clothing",
+    ]
+}
+
+
+
+# WIKIPEDIA — PAGE VIEW VELOCITY
+
+def fetch_wikipedia_pageviews(days_back=30):
+    results = []
+    headers = {
+        "User-Agent": "TrendForecaster/1.0 (academic-capstone-project)"
+    }
+
+    end = datetime.now()
+    start = end - timedelta(days=days_back)
+    start_str = start.strftime("%Y%m%d")
+    end_str = end.strftime("%Y%m%d")
+
+    all_pages = []
+    for category, pages in WIKIPEDIA_PAGES.items():
+        for page in pages:
+            all_pages.append((page, category))
+
+    print(f"  [Wikipedia] Checking {len(all_pages)} pages...")
+
+    for page_title, category in all_pages:
+        try:
+            page_encoded = page_title.replace(" ", "_")
+            url = (
+                f"https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
+                f"en.wikipedia/all-access/all-agents/{page_encoded}/daily/"
+                f"{start_str}/{end_str}"
+            )
+
+            response = requests.get(url, headers=headers, timeout=8)
+
+            if response.status_code == 200:
+                data = response.json()
+                items = data.get("items", [])
+
+                if items:
+                    views_list = [i.get("views", 0) for i in items]
+                    total_views = sum(views_list)
+
+                    recent = views_list[-7:] if len(views_list) >= 7 else views_list
+                    older = views_list[:-7] if len(views_list) > 7 else views_list
+
+                    recent_avg = sum(recent) / len(recent) if recent else 0
+                    older_avg = sum(older) / len(older) if older else 0
+                    velocity = recent_avg - older_avg
+
+                    matched = [
+                        kw for kw in ALL_KEYWORDS
+                        if kw.lower() in page_title.lower()
+                        or page_title.lower() in kw.lower()
+                    ]
+
+                    results.append({
+                        "source": "wikipedia_pageviews",
+                        "page": page_title,
+                        "category": category,
+                        "total_views": total_views,
+                        "recent_avg_daily": round(recent_avg, 1),
+                        "older_avg_daily": round(older_avg, 1),
+                        "velocity": round(velocity, 2),
+                        "peak_views": max(views_list),
+                        "rising": bool(velocity > 50),
+                        "matched_keywords": matched,
+                        "fetched_at": datetime.now().isoformat()
+                    })
+
+                    status = "RISING" if velocity > 50 else "stable"
+                    print(
+                        f"  [Wikipedia] {page_title:<32} "
+                        f"avg: {round(recent_avg):>6}/day  "
+                        f"velocity: {velocity:>8.1f}  [{status}]"
+                    )
+
+            elif response.status_code == 404:
+                print(f"  [Wikipedia] '{page_title}' — no page found")
+
+            time.sleep(0.2)
+
+        except Exception as e:
+            print(f"  [Wikipedia] Error for '{page_title}': {e}")
+
+    rising = [r for r in results if r["rising"]]
+    print(f"  [Wikipedia] {len(results)} pages tracked | {len(rising)} rising")
+
+    return results
+
+
+def fetch_wikipedia_top_trending():
+    results = []
+    headers = {
+        "User-Agent": "TrendForecaster/1.0 (academic-capstone-project)"
+    }
+
+    fashion_beauty_words = [
+        "fashion", "style", "beauty", "makeup", "skin", "hair",
+        "dress", "outfit", "aesthetic", "trend", "clothing",
+        "kurta", "saree", "lehenga", "ethnic", "western",
+        "cosmetic", "skincare", "lipstick", "blush", "cottagecore",
+        "luxury", "vintage", "streetwear", "athleisure"
+    ]
+
+    date = (datetime.now() - timedelta(days=1)).strftime("%Y/%m/%d")
+    url = (
+        f"https://wikimedia.org/api/rest_v1/metrics/pageviews/top/"
+        f"en.wikipedia/all-access/{date}"
+    )
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+            articles = data.get("items", [{}])[0].get("articles", [])
+
+            print(f"  [Wikipedia Top] Scanning top {len(articles)} trending pages...")
+
+            for article in articles[:300]:
+                title = article.get("article", "").replace("_", " ")
+                views = article.get("views", 0)
+                rank = article.get("rank", 0)
+
+                if any(title.startswith(p) for p in [
+                    "Special:", "Wikipedia:", "Portal:",
+                    "Main Page", "File:", "Help:", "Talk:"
+                ]):
+                    continue
+
+                if any(kw in title.lower() for kw in fashion_beauty_words):
+                    results.append({
+                        "source": "wikipedia_top_trending",
+                        "page": title,
+                        "views_today": views,
+                        "global_rank": rank,
+                        "fetched_at": datetime.now().isoformat()
+                    })
+
+            print(f"  [Wikipedia Top] {len(results)} fashion/beauty pages found")
+
+    except Exception as e:
+        print(f"  [Wikipedia Top] Error: {e}")
+
+    return results
+
 def is_noise(phrase):
     for pattern in NOISE_PATTERNS:
         if re.search(pattern, phrase.lower()):
@@ -45,9 +215,8 @@ def is_noise(phrase):
     return False
 
 
-# ─────────────────────────────────────────
+
 # 1. YOUTUBE SHORTS — BROAD FETCH
-# ─────────────────────────────────────────
 
 def fetch_youtube_shorts(seed_topics, max_results=15):
     results = []
@@ -91,10 +260,9 @@ def fetch_youtube_shorts(seed_topics, max_results=15):
     return results
 
 
-# ─────────────────────────────────────────
+
 # 2. GOOGLE TRENDS — CURATED KEYWORDS
 # Scores all known trend keywords by velocity
-# ─────────────────────────────────────────
 
 def fetch_google_trends_velocity(keywords, geo="IN"):
     pytrends = TrendReq(hl="en-IN", tz=330)
@@ -166,9 +334,8 @@ def fetch_google_trends_rising_queries(keywords, geo="IN"):
     return results
 
 
-# ─────────────────────────────────────────
+
 # 3. NEWSAPI — CHECK KEYWORD MENTIONS
-# ─────────────────────────────────────────
 
 def fetch_news_articles(keywords):
     if not NEWS_API_KEY:
@@ -230,9 +397,8 @@ def fetch_news_articles(keywords):
     return results
 
 
-# ─────────────────────────────────────────
+
 # 4. RSS FEEDS
-# ─────────────────────────────────────────
 
 def fetch_rss_feeds(keywords):
     feeds = [
@@ -287,9 +453,8 @@ def fetch_rss_feeds(keywords):
     return results
 
 
-# ─────────────────────────────────────────
+
 # MAIN RUNNER
-# ─────────────────────────────────────────
 
 def run_scout():
     print("\n" + "="*50)
@@ -332,12 +497,24 @@ def run_scout():
     news_with_matches = [n for n in news_data if n.get("matched_keywords")]
     print(f"  Total: {len(news_data)} articles | {len(news_with_matches)} matched keywords")
 
-    # 5. RSS feeds — check curated keywords in publications
-    print("\n[5/5] Fetching RSS feeds...")
+    # 5. RSS feeds
+    print("\n[5/7] Fetching RSS feeds...")
     rss_data = fetch_rss_feeds(ALL_KEYWORDS)
     all_signals.extend(rss_data)
     rss_with_matches = [r for r in rss_data if r.get("matched_keywords")]
     print(f"  Total: {len(rss_data)} articles | {len(rss_with_matches)} matched keywords")
+
+    # 6. Wikipedia page view velocity
+    print("\n[6/7] Checking Wikipedia page view velocity...")
+    wiki_pageviews = fetch_wikipedia_pageviews(days_back=30)
+    all_signals.extend(wiki_pageviews)
+
+    # 7. Wikipedia today's top trending
+    print("\n[7/7] Fetching Wikipedia top trending pages today...")
+    wiki_trending = fetch_wikipedia_top_trending()
+    all_signals.extend(wiki_trending)
+    wiki_rising = [w for w in wiki_pageviews if w.get("rising")]
+    print(f"  Wikipedia rising: {[w['page'] for w in wiki_rising]}")
 
     print("\n" + "="*50)
     print(f"  SCOUT COMPLETE — {len(all_signals)} total signals collected")
@@ -346,9 +523,8 @@ def run_scout():
     return all_signals
 
 
-# ─────────────────────────────────────────
+
 # SUMMARY PRINTER
-# ─────────────────────────────────────────
 
 def print_summary(signals):
     print("\n--- SIGNAL SUMMARY ---\n")
@@ -393,11 +569,40 @@ def print_summary(signals):
     mention_counts = Counter(all_matched)
     for kw, count in mention_counts.most_common(10):
         print(f"    {kw:<30} mentions: {count}")
+    print("\n  Wikipedia RISING pages:")
+    wiki_rising = [
+        s for s in signals
+        if s["source"] == "wikipedia_pageviews" and s.get("rising")
+    ]
+    if wiki_rising:
+        for item in sorted(wiki_rising, key=lambda x: x["velocity"], reverse=True):
+            print(
+                f"    {item['page']:<32} "
+                f"+{item['velocity']:.0f} views/day  "
+                f"({item['recent_avg_daily']:.0f} avg/day)"
+            )
+    else:
+        print("    None rising above threshold")
+
+    print("\n  Wikipedia top trending today (fashion/beauty):")
+    wiki_top = sorted(
+        [s for s in signals if s["source"] == "wikipedia_top_trending"],
+        key=lambda x: x["views_today"],
+        reverse=True
+    )[:5]
+    if wiki_top:
+        for item in wiki_top:
+            print(
+                f"    #{item['global_rank']} "
+                f"{item['page']:<32} "
+                f"{item['views_today']:,} views"
+            )
+    else:
+        print("    None found in today's top")
 
 
-# ─────────────────────────────────────────
+
 # ENTRY POINT
-# ─────────────────────────────────────────
 
 if __name__ == "__main__":
     signals = run_scout()
