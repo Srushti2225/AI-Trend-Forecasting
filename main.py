@@ -339,4 +339,4 @@ def main(use_cache=False):
 if __name__ == "__main__":
     # Set use_cache=True to use previously saved signals
     # Set use_cache=False to fetch fresh data
-    main(use_cache=True)
+    main(use_cache=False)
